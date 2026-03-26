@@ -1,11 +1,17 @@
 #include "common.h"
 #include <netinet/in.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define SERVICE_NAME "conn_mgr"
 
 static conn_t conns[MAX_CONNS];
 static int client_socket;
+
+int find_free_conn();
+bool is_port_connected(uint8_t port);
+bool is_client_port(uint8_t port);
+bool is_line_port(uint8_t port);
 
 void initialize_connections()
 {
@@ -35,7 +41,7 @@ bool get_port_info(uint8_t port_id, port_t *out)
         return false;
     }
 
-    memcpy(out, resp.payload, sizeof(out));
+    memcpy(out, resp.payload, sizeof(port_t));
     return true;
 }
 
@@ -145,7 +151,6 @@ void handle_lookup_connection(const udp_message_t *req, udp_message_t *resp)
 
 void handle_create_connection(const udp_message_t *req, udp_message_t *resp)
 {
-    // TODO: F3 — Create Connection Handler (/5 pts)
     //
     // Implement the logic to create a new connection between a line port
     // and a client port. The request payload tells you the desired name for the connection
@@ -153,6 +158,86 @@ void handle_create_connection(const udp_message_t *req, udp_message_t *resp)
     //
     // Refer to the HLD for connection creation validation instructions.
     // Use set_error_msg() to report *why* a create was rejected.
+    const udp_create_conn_request_t *payload = (const udp_create_conn_request_t *) req->payload;
+    if (payload->name[MAX_CONN_NAME_CHARACTER-1] != 0x0)
+    {
+        // Not null terminated. Error out to prevent denial of service later via non null terminated strings
+        LOG(LOG_WARN, "Received request with non-null terminated connection name");
+        set_error_msg(resp, "Connection name not null terminated");
+        return;
+    }
+    if (payload->name[0] == 0x0)
+    {
+        LOG(LOG_WARN, "Received request with empty name");
+        set_error_msg(resp, "Connection name must not be empty");
+        return;
+    }
+    if (find_connection_by_name(payload->name) != NULL)
+    {
+        LOG(LOG_WARN, "Received request with a duplicate name");
+        set_error_msg(resp, "A connection with that name already exists");
+        return;
+    }
+    if (!is_client_port(payload->client_port))
+    {
+        LOG(LOG_WARN, "Received request with invalid client port %d", payload->client_port);
+        set_error_msg(resp, "Client port is not valid");
+        return;
+    }
+    if (is_port_connected(payload->client_port))
+    {
+        LOG(LOG_WARN, "Client port %d is already connected", payload->client_port);
+        set_error_msg(resp, "Client port is already in a connection");
+        return;
+    }
+    if (!is_line_port(payload->line_port))
+    {
+        LOG(LOG_WARN, "Received request with invalid line port %d", payload->line_port);
+        set_error_msg(resp, "Line port is not valid");
+        return;
+    }
+    int free_conn = find_free_conn();
+    if (free_conn == -1)
+    {
+        LOG(LOG_ERROR, "No free slots available for connection");
+        set_error_msg(resp, "No free slots available for connection");
+        return;
+    }
+    port_t client_port;
+    port_t line_port;
+    if (!get_port_info(payload->client_port, &client_port))
+    {
+        LOG(LOG_ERROR, "Failed to get client port");
+        set_error_msg(resp, "Failed to get client port");
+        return;
+    }
+    if (!get_port_info(payload->line_port, &line_port))
+    {
+        LOG(LOG_ERROR, "Failed to get line port");
+        set_error_msg(resp, "Failed to get line port");
+        return;
+    }
+    if (client_port.operational_state != PORT_UP)
+    {
+        LOG(LOG_WARN, "Client port is DOWN");
+        set_error_msg(resp, "Client port is DOWN");
+        return;
+    }
+    if (line_port.operational_state != PORT_UP)
+    {
+        LOG(LOG_WARN, "Line port is DOWN");
+        set_error_msg(resp, "Line port is DOWN");
+        return;
+    }
+    // conn_name, client_port, line_port, operational_state
+    // conn_name's max length is MAX_CONN_NAME_CHARACTER. Using strcpy could cause a vuln if an attacker doesn't null terminate
+    conn_t *connection = &conns[free_conn];
+    memcpy(&connection->conn_name, &payload->name, MAX_CONN_NAME_CHARACTER);
+    connection->client_port = payload->client_port;
+    connection->line_port = payload->line_port;
+    connection->operational_state = CONN_UP;
+    LOG(LOG_INFO, "Successfully created connection %d from ports %d -> %d", free_conn, connection->client_port, connection->line_port);
+    resp->status = STATUS_SUCCESS;
 }
 
 void handle_get_connections(udp_message_t *resp)
@@ -229,6 +314,48 @@ bool dispatch(const udp_message_t *req, udp_message_t *resp)
     }
 
     return send_reply;
+}
+
+int find_free_conn()
+{
+    for (int i = 0; i < MAX_CONNS; i++)
+    {
+        if (conns[i].client_port == 0)
+        {
+            return i;
+        }
+    }
+    return -1; // Sentinel
+}
+
+bool is_client_port(uint8_t port)
+{
+    if (!is_line_port(port) && port > 0 && port <= MAX_PORT_NUM)
+    {
+        return true;
+    }
+    return false;
+}
+
+bool is_line_port(uint8_t port)
+{
+    if (port > 0 && port <= MAX_LINE_PORTS)
+    {
+        return true;
+    }
+    return false;
+}
+
+bool is_port_connected(uint8_t port)
+{
+    for (int i = 0; i < MAX_CONNS; i++)
+    {
+        if (conns[i].client_port == port)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 int main()
