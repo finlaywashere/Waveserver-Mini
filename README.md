@@ -2,11 +2,11 @@
 
 ## Carleton SCESoc x Ciena Coding Challenge 2026
 
-**Version:** 3.0 (Draft)
+**Version:** 4.0 (FINAL)
 
 **Date:** March 17, 2026
 
-**Authors:** Andy Tran
+**Authors:** Andy Tran, Joanne Tran, Tina Nguyen
 
 **Challenge Date:** March 26, 2026
 
@@ -221,15 +221,15 @@ for the full list of all service-to-service communication.*
 
 ### 3.2 Communication Summary
 
-| Sender         | Receiver       | Purpose                          | Pattern            |
-|----------------|----------------|----------------------------------|--------------------|
-| CLI            | Port Manager   | Query/configure ports            | Request → Reply    |
-| CLI            | Conn Manager   | Create/delete/query connections  | Request → Reply    |
-| CLI            | Traffic Mgr    | Query traffic statistics         | Request → Reply    |
-| Conn Manager   | Port Manager   | Validate port state              | Request → Reply    |
-| Traffic Mgr    | Conn Manager   | Route lookup for frame forwarding| Request → Reply    |
-| Traffic Mgr    | Port Manager   | Update packet counters           | Fire-and-forget    |
-| Port Manager   | Conn Manager   | Port-down/port-up notifications  | Fire-and-forget    |
+| Sender         | Receiver       | Purpose                          | Message Type(s)                                         | Pattern            |
+|----------------|----------------|----------------------------------|---------------------------------------------------------|--------------------|
+| CLI            | Port Manager   | Query/configure ports            | `MSG_GET_PORT_INFO`, `MSG_SET_PORT`, `MSG_DELETE_PORT`, `MSG_INJECT_FAULT`, `MSG_CLEAR_FAULT` | Request → Reply    |
+| CLI            | Conn Manager   | Create/delete/query connections  | `MSG_CREATE_CONN`, `MSG_DELETE_CONN`, `MSG_GET_CONNECTIONS` | Request → Reply    |
+| CLI            | Traffic Mgr    | Query stats, start/stop traffic  | `MSG_GET_TRAFFIC_STATS`, `MSG_START_TRAFFIC`, `MSG_STOP_TRAFFIC` | Request → Reply    |
+| Conn Manager   | Port Manager   | Validate port state              | `MSG_GET_PORT_INFO`                                     | Request → Reply    |
+| Traffic Mgr    | Conn Manager   | Route lookup for frame forwarding| `MSG_LOOKUP_CONNECTION`                                 | Request → Reply    |
+| Traffic Mgr    | Port Manager   | Update packet counters           | `MSG_UPDATE_COUNTERS`                                   | Fire-and-forget    |
+| Port Manager   | Conn Manager   | Port-down/port-up notifications  | `MSG_PORT_STATE_CHANGE`                                 | Fire-and-forget    |
 
 ---
 
@@ -243,8 +243,8 @@ or disabled. Maintains per-port performance monitoring counters.
 Example port table (after enabling ports 1, 3, 4 and injecting a fault on port 3):
 
 ```
- Port  Type    Admin State  Operational State  Fault   Rx Frames  Dropped
- ────  ──────  ───────────  ─────────────────  ──────  ─────────  ───────
+ Port  Type    Admin State  Operational State  Fault   Frames In  Frames Dropped
+ ────  ──────  ───────────  ─────────────────  ──────  ─────────  ──────────────
   1    line    enabled      up                 no        150        0
   2    line    disabled     down               no          0        0
   3    client  enabled      down               yes        34        8
@@ -274,7 +274,7 @@ operational state is *down*. Clear the fault and it comes back up automatically.
     whether the port is safe to carry traffic
 - When operational state changes, send a `MSG_PORT_STATE_CHANGE` notification to Connection Manager
 - Accept counter update messages from Traffic Manager (increment received frames and dropped frames)
-- **Cron job**: Every 5 seconds, log the health status of all ports and increment uptime
+- **Cron job**: Every 5 seconds, log the health status of all ports
 
 **Data Owned:**
 - `port_t ports[6]` — the port inventory (4 client + 2 line)
@@ -360,7 +360,7 @@ to determine where to forward them, and keeps traffic counters.
 
 ---
 
-### 4.4 CLI / Management Console (cli.c) — UDP Port 5004
+### 4.4 CLI / Management Console (cli.c)
 
 **Role:** The user-facing interface. Provides an interactive menu for the network
 administrator to configure and monitor the router.
@@ -408,19 +408,24 @@ Waveserver Mini CLI — Command Reference
 ```
 wsmini> show ports
 
- Port  Type    Admin     Oper      Pkts In    Pkts Out   Pkts Drop
- ────  ──────  ────────  ────────  ─────────  ─────────  ─────────
-  1    line    enabled   up           1500       1500          0
-  2    line    enabled   up              0          0          0
-  3    client  enabled   up           1204       1198          0
-  4    client  enabled   up            302        299          0
-  5    client  enabled   up              0          0          0
-  6    client  disabled  down            0          0          0
+wsmini> show ports
+
+wsmini> show ports
+
+ Port  Type    Admin State  Fault   Oper State  Frames In  Frames Dropped
+ ────  ──────  ───────────  ──────  ──────────  ─────────  ──────────────
+  1    line    disabled     no      down                0          0
+  2    line    disabled     no      down                0          0
+  3    client  disabled     no      down                0          0
+  4    client  disabled     no      down                0          0
+  5    client  disabled     no      down                0          0
+  6    client  disabled     no      down                0          0
+
 
 wsmini> show connections
 
- Name     Client  Line  State
- ───────  ──────  ────  ──────
+ Name     Client  Line  Operational State
+ ───────  ──────  ────  ─────────────────
  xc-1       3      1    UP
  xc-2       4      1    UP
 
@@ -461,7 +466,7 @@ wsmini> stop traffic
 wsmini> show traffic-stats
   Total frames forwarded: 2
   Total frames dropped:   5
-  Traffic is UP
+  Traffic is DOWN
 
 wsmini> show logs --level INFO
  [26-03-24 22:37:46] [INFO] [port_mgr] [port_manager.c:115] Updated counters for port_idx=0: rx=1 dropped=0
@@ -610,7 +615,7 @@ When you sit down on challenge day, you'll have a **GitHub repository** containi
 
 This is where you'll collaborate, track progress, and raise a PR with your implementation.
 
-### 7.3 Workflow
+### 7.2 Workflow
 
 1. **Fork** the repository to your team's GitHub account
 2. **Clone** your fork and work on it locally
@@ -675,14 +680,12 @@ waveserver-mini/
 
 ---
 
----
-
 ## 9. Glossary
 
 | Term                | Definition                                                                |
 |---------------------|---------------------------------------------------------------------------|
 | **OTN**             | Optical Transport Network — technology for moving data over fiber optics  |
-| **Frame**           | Packaged information. Contains message, frame_id, client port, line port info) |
+| **Frame**           | Packaged information. Contains message, frame_id, client port, line port info |
 | **Client Port**     | A port that faces the customer's equipment (Ports 3–6)                   |
 | **Line Port**       | A port that faces the fiber optic network (Ports 1–2)                    |
 | **Connection**      | A cross-connect linking a client port to a line port                     |
